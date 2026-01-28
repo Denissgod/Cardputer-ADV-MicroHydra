@@ -1,160 +1,212 @@
-from machine import Pin
-
-
+import machine
 
 """
-lib.keyboard version: 1.1
+lib.keyboard version: 2.0 (TCA8418 for Cardputer ADV)
 changes:
-	Cleaned unused code.
-	Added KeyBoard.get_new_keys()
+    Replaced shift-register scanning with TCA8418 I2C driver.
+    Compatible with MicroHydra API.
 """
 
-#lookup values for our keyboard
-kc_shift = const(61)
-kc_fn = const(65)
+# TCA8418 Registers
+_REG_CFG = const(0x01)
+_REG_INT_STAT = const(0x02)
+_REG_KEY_EVENT_A = const(0x04)
+_REG_KP_GPIO1 = const(0x1D)
+_REG_KP_GPIO2 = const(0x1E)
+_REG_KP_GPIO3 = const(0x1F)
 
+# Modifier Key IDs
+_KC_FN = const(3)
+_KC_SHIFT = const(7)
+_KC_CTRL = const(4)
+_KC_ALT = const(14)
+_KC_OPT = const(8)
+
+# Key Maps: ID -> (Base, Shift, Fn)
+# Matches original MicroHydra key names
 keymap = {
-	67:'`',  63:'1',  57:'2',  53:'3', 47:'4', 43:'5', 37:'6', 33:'7', 27:'8', 23:'9', 17:'0', 13:'_', 7:'=', 3:'BSPC',
-	
-	66:'TAB',62:'q',  56:'w',  52:'e', 46:'r', 42:'t', 36:'y', 32:'u', 26:'i', 22:'o', 16:'p', 12:'[', 6:']', 2:'\\',
-	
-					  55:'a',  51:'s', 45:'d', 41:'f', 35:'g', 31:'h', 25:'j', 21:'k', 15:'l', 11:';', 5:"'", 1:'ENT',
-	
-	64:'CTL',60:'OPT',54:'ALT',50:'z', 44:'x', 40:'c', 34:'v', 30:'b', 24:'n', 20:'m', 14:',', 10:'.', 4:'/', 0:'SPC',
-	}
+    # Col 1
+    1: ('ESC', 'ESC', 'ESC'),
+    2: ('TAB', 'TAB', 'TAB'),
+    3: (None, None, None),  # FN
+    4: ('CTL', 'CTL', 'CTL'),  # CTRL
+    
+    # Col 2
+    5: ('1', '!', 'F1'),
+    6: ('q', 'Q', None),
+    7: (None, None, None),  # SHIFT
+    8: ('OPT', 'OPT', 'OPT'),  # OPT
+    
+    # Col 3
+    11: ('2', '@', 'F2'),
+    12: ('w', 'W', None),
+    13: ('a', 'A', None),
+    14: ('ALT', 'ALT', 'ALT'),  # ALT
+    
+    # Col 4
+    15: ('3', '#', 'F3'),
+    16: ('e', 'E', None),
+    17: ('s', 'S', None),
+    18: ('z', 'Z', None),
+    
+    # Col 5
+    21: ('4', '$', 'F4'),
+    22: ('r', 'R', None),
+    23: ('d', 'D', None),
+    24: ('x', 'X', None),
+    
+    # Col 6
+    25: ('5', '%', 'F5'),
+    26: ('t', 'T', None),
+    27: ('f', 'F', None),
+    28: ('c', 'C', None),
+    
+    # Col 7
+    31: ('6', '^', 'F6'),
+    32: ('y', 'Y', None),
+    33: ('g', 'G', None),
+    34: ('v', 'V', None),
+    
+    # Col 8
+    35: ('7', '&', 'F7'),
+    36: ('u', 'U', None),
+    37: ('h', 'H', None),
+    38: ('b', 'B', None),
+    
+    # Col 9
+    41: ('8', '*', 'F8'),
+    42: ('i', 'I', None),
+    43: ('j', 'J', None),
+    44: ('n', 'N', None),
+    
+    # Col 10
+    45: ('9', '(', 'F9'),
+    46: ('o', 'O', None),
+    47: ('k', 'K', None),
+    48: ('m', 'M', None),
+    
+    # Col 11
+    51: ('0', ')', 'F10'),
+    52: ('p', 'P', None),
+    53: ('l', 'L', 'UP'),  # Fn+L = Arrow Up
+    54: (',', '<', None),
+    
+    # Col 12
+    55: ('-', '_', None),
+    56: ('[', '{', None),
+    57: (';', ':', 'LEFT'),  # Fn+; = Arrow Left
+    58: ('.', '>', 'DOWN'),  # Fn+. = Arrow Down
+    
+    # Col 13
+    61: ('=', '+', None),
+    62: (']', '}', None),
+    63: ("'", '"', None),
+    64: ('/', '?', 'RIGHT'),  # Fn+/ = Arrow Right
+    
+    # Col 14
+    65: ('BSPC', 'BSPC', 'DEL'),  # Backspace / Delete
+    66: ('\\', '|', None),
+    67: ('ENT', 'ENT', 'ENT'),  # Enter
+    68: ('SPC', 'SPC', 'SPC'),  # Space
+}
 
-keymap_shift = {
-	67:'~',  63:'!',  57:'@',  53:'#', 47:'$', 43:'%', 37:'^', 33:'&', 27:'*', 23:'(', 17:')', 13:'-', 7:'+', 3:'BSPC',
-	
-	66:'TAB',62:'Q',  56:'W',  52:'E', 46:'R', 42:'T', 36:'Y', 32:'U', 26:'I', 22:'O', 16:'P', 12:'{', 6:'}', 2:'|',
-	
-					  55:'A',  51:'S', 45:'D', 41:'F', 35:'G', 31:'H', 25:'J', 21:'K', 15:'L', 11:':', 5:'"', 1:'ENT',
-	
-	64:'CTL',60:'OPT',54:'ALT',50:'Z', 44:'X', 40:'C', 34:'V', 30:'B', 24:'N', 20:'M', 14:'<', 10:'>', 4:'?', 0:'SPC',
-	}
 
-keymap_fn = {
-	67:'ESC',63:'F1', 57:'F2', 53:'F3',47:'F4',43:'F5',37:'F6',33:'F7',27:'F8',23:'F9',17:'F10',13:'_',7:'=', 3:'DEL',
-	
-	66:'TAB',62:'q',  56:'w',  52:'e', 46:'r', 42:'t', 36:'y', 32:'u', 26:'i', 22:'o', 16:'p', 12:'[', 6:']', 2:'\\',
-	
-					  55:'a',  51:'s', 45:'d', 41:'f', 35:'g', 31:'h', 25:'j', 21:'k', 15:'l', 11:'UP',5:"'", 1:'ENT',
-	
-	64:'CTL',60:'OPT',54:'ALT',50:'z', 44:'x', 40:'c', 34:'v', 30:'b', 24:'n',20:'m',14:'LEFT',10:'DOWN',4:'RIGHT',0:'SPC',
-	}
-
-
-class KeyBoard():
-	def __init__(self):
-		self._key_list_buffer = []
-		
-		#setup the "Go" button!
-		self.go = Pin(0, Pin.IN, Pin.PULL_UP)
-
-		#setup column pins. These are read as inputs.
-		self.c0 = Pin(13, Pin.IN, Pin.PULL_UP)
-		self.c1 = Pin(15, Pin.IN, Pin.PULL_UP)
-		self.c2 = Pin(3, Pin.IN, Pin.PULL_UP)
-		self.c3 = Pin(4, Pin.IN, Pin.PULL_UP)
-		self.c4 = Pin(5, Pin.IN, Pin.PULL_UP)
-		self.c5 = Pin(6, Pin.IN, Pin.PULL_UP)
-		self.c6 = Pin(7, Pin.IN, Pin.PULL_UP)
-		
-		#setup row pins. These are given to a 74hc138 "demultiplexer", which lets us turn 3 output pins into 8 outputs (8 rows) 
-		self.a0 = Pin(8, Pin.OUT)
-		self.a1 = Pin(9, Pin.OUT)
-		self.a2 = Pin(11, Pin.OUT)
-		
-		self.key_state = []
-		self.prev_key_state = []
-		
-	def scan(self):
-		"""scan through the matrix to see what keys are pressed."""
-		
-		self._key_list_buffer = []
-		
-		#this for loop iterates through the 8 rows of our matrix
-		for row in range(0,8):
-			self.a0.value(row & 0b001)
-			self.a1.value( ( row & 0b010 ) >> 1)
-			self.a2.value( ( row & 0b100 ) >> 2)
-		
-			#for i, col in enumerate(self.columns):
-			#for i in range(0,7):
-			#    if not self.columns[i].value(): # button pressed
-			#        key_address = (i * 10) + row
-			#        self._key_list_buffer.append(key_address)
-			# I know this is ugly, it should be a loop.
-			# but this scan can be slow, and doing  this instead of a loop runs much faster:
-			if not self.c6.value():
-				self._key_list_buffer.append(row)
-			if not self.c5.value():
-				self._key_list_buffer.append(10 + row)
-			if not self.c4.value():
-				self._key_list_buffer.append(20 + row)
-			if not self.c3.value():
-				self._key_list_buffer.append(30 + row)
-			if not self.c2.value():
-				self._key_list_buffer.append(40 + row)
-			if not self.c1.value():
-				self._key_list_buffer.append(50 + row)
-			if not self.c0.value():
-				self._key_list_buffer.append(60 + row)
-		
-		return self._key_list_buffer                
-				
-				
-	def get_pressed_keys(self):
-		"""Get a readable list of currently held keys."""
-		
-		#update our scan results
-		self.scan()
-		self.key_state = []
-		
-		if self.go.value() == 0:
-			self.key_state.append("GO")
-		
-		if not self._key_list_buffer and not self.key_state: # if nothing is pressed, we can return an empty list
-			return self.key_state
-		
-		if kc_fn in self._key_list_buffer:
-			#remove modifier keys which are already accounted for
-			self._key_list_buffer.remove(kc_fn)
-			if kc_shift in self._key_list_buffer:
-				self._key_list_buffer.remove(kc_shift)
-				
-			for keycode in self._key_list_buffer:
-				self.key_state.append(keymap_fn[keycode])
-				
-		elif kc_shift in self._key_list_buffer:
-			#remove modifier keys which are already accounted for
-			self._key_list_buffer.remove(kc_shift)
-			
-			for keycode in self._key_list_buffer:
-				self.key_state.append(keymap_shift[keycode])
-		
-		else:
-			for keycode in self._key_list_buffer:
-				self.key_state.append(keymap[keycode])
-		
-		return self.key_state
-	
-	def get_new_keys(self):
-		"""
-		Return a list of keys which are newly pressed.
-		"""
-		self.prev_key_state = self.key_state
-		self.get_pressed_keys()
-		# Originally I wanted to use a set() for this, but with testing, this is apparantly faster. 
-		return [key for key in self.key_state if key not in self.prev_key_state]
-		
+class KeyBoard:
+    def __init__(self):
+        # I2C for TCA8418
+        self.i2c = machine.I2C(0, sda=machine.Pin(8), scl=machine.Pin(9), freq=400000)
+        self.addr = 0x34
+        
+        # State tracking
+        self.key_state = []
+        self.prev_key_state = []
+        self._shift_held = False
+        self._fn_held = False
+        
+        # "Go" button on Pin 0 (original Cardputer feature)
+        self.go = machine.Pin(0, machine.Pin.IN, machine.Pin.PULL_UP)
+        
+        # Initialize TCA8418
+        self._init_chip()
+    
+    def _init_chip(self):
+        try:
+            # Enable all rows and columns for matrix
+            self.i2c.writeto_mem(self.addr, _REG_KP_GPIO1, b'\xFF')
+            self.i2c.writeto_mem(self.addr, _REG_KP_GPIO2, b'\xFF')
+            self.i2c.writeto_mem(self.addr, _REG_KP_GPIO3, b'\x03')
+            # Config: AI=1, KE_IEN=1, GPI_IEN=1
+            self.i2c.writeto_mem(self.addr, _REG_CFG, b'\x83')
+        except Exception as e:
+            print(f"TCA8418 init error: {e}")
+    
+    def _read_events(self):
+        """Read all pending key events from FIFO."""
+        events = []
+        try:
+            # Check if there are events
+            status = self.i2c.readfrom_mem(self.addr, _REG_INT_STAT, 1)[0]
+            while status & 0x01:  # Key event flag
+                event = self.i2c.readfrom_mem(self.addr, _REG_KEY_EVENT_A, 1)[0]
+                if event == 0:
+                    break
+                events.append(event)
+                # Clear interrupt
+                self.i2c.writeto_mem(self.addr, _REG_INT_STAT, b'\x01')
+                status = self.i2c.readfrom_mem(self.addr, _REG_INT_STAT, 1)[0]
+        except:
+            pass
+        return events
+    
+    def get_pressed_keys(self):
+        """Get a readable list of currently held keys."""
+        self.key_state = []
+        
+        # Check "GO" button
+        if self.go.value() == 0:
+            self.key_state.append("GO")
+        
+        # Process TCA8418 events
+        events = self._read_events()
+        for event in events:
+            key_id = event & 0x7F
+            is_press = (event & 0x80) > 0
+            
+            # Track modifiers
+            if key_id == _KC_SHIFT:
+                self._shift_held = is_press
+                continue
+            elif key_id == _KC_FN:
+                self._fn_held = is_press
+                continue
+            elif key_id in (_KC_CTRL, _KC_ALT, _KC_OPT):
+                # Add modifier key names on press
+                if is_press and key_id in keymap:
+                    self.key_state.append(keymap[key_id][0])
+                continue
+            
+            # Regular keys - only add on press
+            if is_press and key_id in keymap:
+                base, shift, fn = keymap[key_id]
+                if self._fn_held and fn:
+                    self.key_state.append(fn)
+                elif self._shift_held and shift:
+                    self.key_state.append(shift)
+                elif base:
+                    self.key_state.append(base)
+        
+        return self.key_state
+    
+    def get_new_keys(self):
+        """Return a list of keys which are newly pressed."""
+        self.prev_key_state = self.key_state.copy()
+        self.get_pressed_keys()
+        return [key for key in self.key_state if key not in self.prev_key_state]
 
 
 if __name__ == "__main__":
-	import time
-	kb = KeyBoard()
-	for _ in range(0,400):
-		print(kb.get_new_keys())
-		time.sleep_ms(10)
-				
-		
+    import time
+    kb = KeyBoard()
+    for _ in range(0, 400):
+        print(kb.get_new_keys())
+        time.sleep_ms(10)
